@@ -1,5 +1,6 @@
 service mybbs
 {
+    disable     = no
     flags       = NAMEINARGS
     socket_type = stream
     protocol    = tcp
