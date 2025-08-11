@@ -17,9 +17,11 @@
 #include "Nodes.h"
 #include "NiKomFuncs.h"
 #include "NiKomLib.h"
+#include "NiKEditor.h"
 #include "VersionStrings.h"
 #include "Logging.h"
 #include "Terminal.h"
+#include "BasicIO.h"
 #include "UserNotificationHooks.h"
 #include "Languages.h"
 #include "StyleSheets.h"
@@ -173,12 +175,17 @@ void fido_visatext(int text,struct Mote *motpek, struct Stack *repliesStack) {
   struct FidoText *ft, *repliedFt;
   struct FidoLine *fl;
   char fullpath[100];
-  int repliedTextId;
+  int repliedTextId, effectiveCharset;
   CURRENT_USER->read++;
   Servermem->info.lasta++;
   Statstr.read++;
   MakeMsgFilePath(motpek->dir, text - motpek->renumber_offset, fullpath);
-  ft = ReadFidoTextTags(fullpath, RFT_NoSeenBy, !(CURRENT_USER->flaggor & SHOWKLUDGE), TAG_DONE);
+  effectiveCharset = Servermem->nodeInfo[nodnr].nodeType == NODCON
+    ? CHRS_LATIN1 : CURRENT_USER->chrset;
+  ft = ReadFidoTextTags(fullpath,
+                        RFT_NoSeenBy, !(CURRENT_USER->flaggor & SHOWKLUDGE),
+                        RFT_PassthroughCharset, effectiveCharset,
+                        TAG_DONE);
   if(!ft) {
     LogEvent(SYSTEM_LOG, ERROR, "Can't read fido text %s.", fullpath);
     DisplayInternalError();
@@ -207,6 +214,7 @@ void fido_visatext(int text,struct Mote *motpek, struct Stack *repliesStack) {
   } else {
     SendString("\n");
   }
+  SetCharacterSetPassthrough(CURRENT_USER->chrset == ft->charset);
   ITER_EL(fl, ft->text, line_node, struct FidoLine *) {
     if(fl->text[0] == 1) {
       if(CURRENT_USER->flaggor & SHOWKLUDGE) {
@@ -222,6 +230,7 @@ void fido_visatext(int text,struct Mote *motpek, struct Stack *repliesStack) {
       }
     }
   }
+  SetCharacterSetPassthrough(FALSE);
   SendStringCat("\n%s\r\n", CATSTR(MSG_ORG_TEXT_END_OF_TEXT), text,ft->fromuser);
   FreeFidoText(ft);
   displayComments(text, motpek, repliesStack);
@@ -291,6 +300,7 @@ int fido_skriv(int komm,int komtill) {
   struct Mote *motpek;
   struct FidoLine *fl;
   char filnamn[15], fullpath[100], msgid[50];
+  struct EditContext editContext;
 
   Servermem->nodeInfo[nodnr].action = SKRIVER;
   Servermem->nodeInfo[nodnr].currentConf = mote2;
@@ -307,11 +317,7 @@ int fido_skriv(int komm,int komtill) {
       return 0;
     }
     strcpy(ft.touser, komft->fromuser);
-    if(!strncmp(komft->subject, "Re:", 3)) {
-      strcpy(ft.subject, komft->subject);
-    } else {
-      sprintf(ft.subject, "Re: %s", komft->subject);
-    }
+    strcpy(ft.subject, komft->subject);
     strcpy(msgid, komft->msgid);
     FreeFidoText(komft);
   }
@@ -359,7 +365,15 @@ int fido_skriv(int komm,int komtill) {
   } else {
     SendString("\n");
   }
-  editret = edittext(NULL);
+
+  memset(&editContext, 0, sizeof(struct EditContext));
+  editContext.subject = ft.subject;
+  editContext.subjectMaxLen = 71;
+  if(komm) {
+    editContext.replyingToText = komtill;
+    editContext.replyingInConfId = mote2;
+  }
+  editret = edittext(&editContext);
   if(editret == 1) {
     return 1;
   }
@@ -449,4 +463,45 @@ void fidolistaarende(struct Mote *motpek,int dir) {
       break;
     }
   }
+}
+
+int SkipSubjectInFidoConf(struct Mote *conf, char *args, int lastReadText) {
+  struct FidoText *ft;
+  int arglen, skipCount = 0, i;
+  char path[100], subject[72];
+
+  if(args[0] == '\0') {
+    MakeMsgFilePath(conf->dir, lastReadText - conf->renumber_offset, path);
+    if((ft = ReadFidoTextTags(path, RFT_HeaderOnly, TRUE, TAG_DONE)) == NULL) {
+      LogEvent(SYSTEM_LOG, ERROR,
+               "Could not read fido text '%s' as the latest read text for 'Skip Subject'",
+               path);
+      DisplayInternalError();
+      return 0;
+    }
+    strcpy(subject, ft->subject);
+    args = subject;
+    FreeFidoText(ft);
+  }
+
+  arglen = strlen(args);
+  for(i = CUR_USER_UNREAD->lowestPossibleUnreadText[conf->nummer]; i <= conf->texter; i++) {
+    if(IntListFind(g_readRepliesList, i) != -1) {
+      continue;
+    }
+    MakeMsgFilePath(conf->dir, i - conf->renumber_offset, path);
+    if((ft = ReadFidoTextTags(path, RFT_HeaderOnly, TRUE, TAG_DONE)) == NULL) {
+      LogEvent(SYSTEM_LOG, ERROR,
+               "Could not read fido text '%s' when searching for texts in 'Skip Subject'",
+               path);
+      DisplayInternalError();
+      return skipCount;
+    }
+    if(strncmp(ft->subject, args, arglen) == 0) {
+      IntListAppend(g_readRepliesList, i);
+      skipCount++;
+    }
+    FreeFidoText(ft);
+  }
+  return skipCount;
 }

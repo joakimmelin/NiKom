@@ -1,11 +1,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <exec/memory.h>
 #include <proto/dos.h>
 #include "NiKomStr.h"
 #include "Nodes.h"
 #include "NiKomLib.h"
 #include "NiKomFuncs.h"
+#include "NiKEditor.h"
 #include "Terminal.h"
 #include "UserNotificationHooks.h"
 #include "Logging.h"
@@ -377,6 +379,7 @@ void cmd_Reaction(long reaction) {
   struct MemHeaderExtension *ext;
   struct Header textHeader;
   struct Notification notification;
+  char tmpstr[50];
   
   if(argument[0]) {
     if(mote2 == -1) {
@@ -454,6 +457,13 @@ void cmd_Reaction(long reaction) {
     SendStringCat("\r\n\n%s\r\n", reaction == EXT_REACTION_LIKE
                   ? CATSTR(MSG_REACTION_DONE_PRS) : CATSTR(MSG_REACTION_DONE_DIS),
                   textId);
+    strcpy(tmpstr, getusername(inloggad));
+    LogEvent(USAGE_LOG, INFO, "%s %s text %d av %s i %s",
+             tmpstr,
+             reaction == EXT_REACTION_LIKE ? "hyllar" : "dissar",
+             textId,
+             getusername(textHeader.person),
+             conf->namn);
   }
   DeleteMemHeaderExtension(ext);
 
@@ -470,4 +480,46 @@ void Cmd_Like(void) {
 
 void Cmd_Dislike(void) {
   cmd_Reaction(EXT_REACTION_DISLIKE);
+}
+
+void Cmd_ListActive(void) {
+  int numTexts = 100, confId, textsCounted = 0, i;
+  long *counter;
+  struct Mote *conf;
+
+  SendString("\r\n\n");
+
+  if(argument[0] != '\0') {
+    numTexts = atoi(argument);
+    if(numTexts <= 0) {
+      SendString("%s\r\n", CATSTR(MSG_LIST_ACTIVE_SYNTAX));
+      return;
+    }
+  }
+  
+  counter = AllocMem(sizeof(long) * MAXMOTE, MEMF_CLEAR);
+
+  for(i = Servermem->info.hightext;
+      i >= Servermem->info.lowtext && textsCounted < numTexts;
+      i--) {
+    if((confId = GetConferenceForText(i)) == -1) {
+      continue;
+    }
+    if(!MayReadConf(confId, inloggad, CURRENT_USER)) {
+      continue;
+    }
+    textsCounted++;
+    counter[confId]++;
+  }
+
+  ITER_EL(conf, Servermem->mot_list, mot_node, struct Mote *) {
+    if(counter[conf->nummer] == 0) {
+      continue;
+    }
+    SendString("%3d %c %s\r\n",
+               counter[conf->nummer],
+               IsMemberConf(conf->nummer, inloggad, CURRENT_USER) ? ' ' : '*',
+               conf->namn);
+  }
+  FreeMem(counter, sizeof(long) * MAXMOTE);
 }
