@@ -2,6 +2,7 @@
 
 # The motivation for this script is to be able to read a line of text with
 # a timeout, while handling both CR and LF as line ending. 
+# Don't know if my edit on line 34 is correct but it works for me. // JM
 
 import sys
 import select
